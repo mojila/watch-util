@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">WatchUtil Face</string>
+    <string name="watch_face_name">WatchUtil</string>
+    <string name="permission_rationale">WatchUtil needs sensor access for live heart rate. The complication fallback works without it.</string>
+    <string name="permission_granted">Live heart rate enabled.</string>
+    <string name="permission_denied">Sensor access denied. Heart rate will use the complication instead.</string>
+</resources>

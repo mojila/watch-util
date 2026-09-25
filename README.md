@@ -71,7 +71,16 @@ export ANDROID_HOME=~/Library/Android/sdk
 ./gradlew :app:assembleDebug
 adb install -r -g app/build/outputs/apk/debug/app-debug.apk
 ./scripts/start-bridge.sh
+
+# Watch face (optional, separate APK)
+./gradlew :watchface:assembleDebug
+adb install -r watchface/build/outputs/apk/debug/watchface-debug.apk
+adb shell pm grant com.watchutil.watchface android.permission.BODY_SENSORS
 ```
+
+The watch face shows time, battery, and heart rate. It samples the heart-rate
+sensor in short bursts while interactive, never in ambient, and falls back to a
+user-chosen heart-rate complication. Select it from the system watch-face picker.
 
 Connect the watch first, either over USB or with `adb connect <watch-ip>:5555`
 (enable ADB debugging in the watch's developer options).
@@ -83,6 +92,8 @@ After a reboot, run `./scripts/start-bridge.sh` again.
 ```sh
 ./gradlew :app:testDebugUnitTest    # unit tests
 ./gradlew :app:assembleDebug        # build
+./gradlew :watchface:testDebugUnitTest
+./gradlew :watchface:assembleDebug
 ```
 
 Pure logic — the bridge protocol, `/proc` parsing, and `pm` output parsing — is
@@ -100,6 +111,12 @@ app/src/main/java/com/watchutil/
   core/                        privileged execution, /proc stats, pm parsing
   ui/                          theme and screens
 app/src/test/                  JVM unit tests for pure logic
+watchface/src/main/java/com/watchutil/watchface/
+  WatchUtilWatchFaceService.kt service, complication slot, config wiring
+  WatchUtilRenderer.kt         canvas renderer (interactive + ambient)
+  core/                        pure logic: battery, HR formatting/throttle
+  sensor/                      throttled heart-rate burst source
+watchface/src/test/            JVM unit tests for pure logic
 scripts/                       install and bridge-launch helpers
 .opencode/agents/              orchestrator, android-wear-dev, qa-tester
 ```

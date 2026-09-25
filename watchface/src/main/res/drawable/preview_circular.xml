@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Round preview for circular displays. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="400dp"
+    android:height="400dp"
+    android:viewportWidth="400"
+    android:viewportHeight="400">
+    <path
+        android:fillColor="#0B1E2D"
+        android:pathData="M200,20a180,180 0 1,0 0.1,0z" />
+    <path
+        android:fillColor="#4FC3F7"
+        android:pathData="M200,90a110,110 0 1,0 0.1,0zM200,110a90,90 0 1,1 -0.1,0z" />
+    <path
+        android:fillColor="#81C784"
+        android:pathData="M200,180a20,20 0 1,0 0.1,0zM200,186a14,14 0 1,1 -0.1,0z" />
+</vector>

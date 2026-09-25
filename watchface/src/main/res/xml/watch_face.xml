@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Watch face description consumed by the system wallpaper picker. -->
+<wallpaper xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/watch_face_name"
+    android:thumbnail="@drawable/preview" />

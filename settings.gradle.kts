@@ -22,3 +22,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "WatchUtil"
 include(":app")
+include(":watchface")
