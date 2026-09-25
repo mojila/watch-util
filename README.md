@@ -75,12 +75,33 @@ adb install -r -g app/build/outputs/apk/debug/app-debug.apk
 # Watch face (optional, separate APK)
 ./gradlew :watchface:assembleDebug
 adb install -r watchface/build/outputs/apk/debug/watchface-debug.apk
-adb shell pm grant com.watchutil.watchface android.permission.BODY_SENSORS
+adb shell pm grant com.watchutil.watchface com.google.android.wearable.permission.RECEIVE_COMPLICATION_DATA
 ```
 
-The watch face shows time, battery, and heart rate. It samples the heart-rate
-sensor in short bursts while interactive, never in ambient, and falls back to a
-user-chosen heart-rate complication. Select it from the system watch-face picker.
+The watch face shows the time (no seconds), a locale-aware date with the battery
+level (`Fri, Sep 25 · 64%`), and a **2x3 grid of six health metrics**: steps,
+calories, heart rate, stand, SpO2, and vitality. Every metric is read from a
+**complication slot**, each defaulted to the watch's own fitness provider (on
+Xiaomi hardware, `StepComplicationService`, `CaloriesComplicationService`, and so
+on). The defaults are *not* fixed: the slot stays user-changeable, so another
+watch can bind a different provider — or none — in the face editor. A slot with
+no usable data shows `--` rather than failing.
+
+The face reads no sensor of its own; there is no live heart-rate sampling, so
+`BODY_SENSORS` is not needed. Ambient/AOD draws only time and battery.
+
+Complication data reaches a watch face only if the face holds
+`com.google.android.wearable.permission.RECEIVE_COMPLICATION_DATA` — a dangerous
+permission the Wear OS system app defines. It is **not** granted automatically
+and the platform's own prompt fires only once, when the face is first added, so
+`WatchFaceConfigActivity` (the face editor) requests it explicitly. Grant it from
+the watch-face editor, or with the `pm grant` command above. Without it, the
+system's `ComplicationController` discards every provider response and all six
+slots stay at `--`.
+
+Values are cached in app-private `SharedPreferences`, so waking the screen after
+the face process was reclaimed by the OS shows the last known numbers instead of
+flashing `--`.
 
 Connect the watch first, either over USB or with `adb connect <watch-ip>:5555`
 (enable ADB debugging in the watch's developer options).
@@ -98,7 +119,9 @@ After a reboot, run `./scripts/start-bridge.sh` again.
 
 Pure logic — the bridge protocol, `/proc` parsing, and `pm` output parsing — is
 covered by JVM unit tests under `app/src/test/`, so most changes can be checked
-without a device. On-device behavior (bridge launch, service toggling) needs a
+without a device. The watch face's pure helpers (stat formatting, grid geometry,
+the last-known-value cache) are tested under `watchface/src/test/`. On-device
+behavior (bridge launch, service toggling, complication rendering) needs a
 connected watch.
 
 ## Project layout
@@ -112,10 +135,10 @@ app/src/main/java/com/watchutil/
   ui/                          theme and screens
 app/src/test/                  JVM unit tests for pure logic
 watchface/src/main/java/com/watchutil/watchface/
-  WatchUtilWatchFaceService.kt service, complication slot, config wiring
+  WatchUtilWatchFaceService.kt service, six metric complication slots
   WatchUtilRenderer.kt         canvas renderer (interactive + ambient)
-  core/                        pure logic: battery, HR formatting/throttle
-  sensor/                      throttled heart-rate burst source
+  StatValueStore.kt            persistent last-known-value cache
+  core/                        pure logic: battery, stat format/grid/metric, cache
 watchface/src/test/            JVM unit tests for pure logic
 scripts/                       install and bridge-launch helpers
 .opencode/agents/              orchestrator, android-wear-dev, qa-tester
