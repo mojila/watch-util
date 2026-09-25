@@ -8,6 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.watchutil.bridge.BridgeClient
 import com.watchutil.core.Backend
+import com.watchutil.core.CacheCleaner
 import com.watchutil.core.PackageParser
 import com.watchutil.core.PrivilegedExecutor
 import com.watchutil.core.ServiceEntry
@@ -31,6 +32,7 @@ data class UiState(
     val backend: Backend = Backend.NONE,
     val services: List<ServiceEntry> = emptyList(),
     val servicesLoading: Boolean = false,
+    val clearingCaches: Boolean = false,
     val busyPackage: String? = null,
     val message: String? = null,
     val bridgeToken: String = "",
@@ -177,6 +179,69 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update {
                     it.copy(busyPackage = null, message = "Failed: ${result.combined.ifBlank { "unknown error" }}")
                 }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- caches
+
+    /**
+     * Trims every app cache via `pm trim-caches`. Non-destructive: only cache
+     * files are deleted, never package data, logins or settings.
+     *
+     * The requested free-space target is derived from `df -k /data` so it is
+     * strictly larger than the volume, which makes every cache eligible. When
+     * `df` cannot be parsed, a fixed 1 TiB fallback is used.
+     */
+    fun clearCaches() {
+        if (_state.value.clearingCaches) return
+        _state.update { it.copy(clearingCaches = true, message = null) }
+
+        viewModelScope.launch {
+            if (executor.backend == Backend.NONE) {
+                _state.update {
+                    it.copy(
+                        clearingCaches = false,
+                        message = "No privileges. Start the ADB bridge first.",
+                    )
+                }
+                return@launch
+            }
+
+            val before = executor.exec("df", "-k", "/data")
+            val spaceBefore = CacheCleaner.parseDf(before.out)
+            val args = if (spaceBefore != null) {
+                CacheCleaner.trimAllArgs(spaceBefore)
+            } else {
+                CacheCleaner.trimAllArgs()
+            }
+
+            val result = executor.exec(args)
+            if (!result.ok) {
+                _state.update {
+                    it.copy(
+                        clearingCaches = false,
+                        message = "Clear caches failed: ${
+                            result.combined.ifBlank { "unknown error" }
+                        }",
+                    )
+                }
+                return@launch
+            }
+
+            val after = executor.exec("df", "-k", "/data")
+            val spaceAfter = CacheCleaner.parseDf(after.out)
+            val freed = if (spaceBefore != null && spaceAfter != null) {
+                (spaceAfter.freeBytes - spaceBefore.freeBytes).coerceAtLeast(0L)
+            } else {
+                0L
+            }
+
+            _state.update {
+                it.copy(
+                    clearingCaches = false,
+                    message = "Caches cleared · ${CacheCleaner.formatBytes(freed)} freed",
+                )
             }
         }
     }

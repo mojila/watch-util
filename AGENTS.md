@@ -44,6 +44,7 @@ app/src/main/java/com/watchutil/
     PrivilegedExecutor.kt      bridge -> root -> none, in that order
     SystemStatsReader.kt       /proc/stat and /proc/meminfo parsing
     PackageParser.kt           pm output parsing (pure, unit-tested)
+    CacheCleaner.kt            df parsing and pm trim-caches argv (pure, unit-tested)
   ui/
     Theme.kt                   Wear Material 3 color scheme
     WatchUtilApp.kt            screens and components

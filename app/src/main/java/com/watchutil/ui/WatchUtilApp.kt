@@ -40,9 +40,9 @@ import com.watchutil.MainViewModel
 import com.watchutil.Screen
 import com.watchutil.UiState
 import com.watchutil.core.Backend
+import com.watchutil.core.CacheCleaner
 import com.watchutil.core.ServiceEntry
 import com.watchutil.core.ServiceState
-import java.util.Locale
 
 @Composable
 fun WatchUtilApp(viewModel: MainViewModel) {
@@ -68,6 +68,7 @@ fun WatchUtilApp(viewModel: MainViewModel) {
             Screen.DASHBOARD -> DashboardScreen(
                 state = state,
                 onManageServices = { viewModel.navigate(Screen.SERVICES) },
+                onClearCaches = { viewModel.clearCaches() },
                 onRefreshBackend = { viewModel.refreshBackend() },
                 onRequestReboot = { viewModel.navigate(Screen.CONFIRM_REBOOT) },
             )
@@ -116,6 +117,7 @@ private fun WatchScreen(
 private fun DashboardScreen(
     state: UiState,
     onManageServices: () -> Unit,
+    onClearCaches: () -> Unit,
     onRefreshBackend: () -> Unit,
     onRequestReboot: () -> Unit,
 ) {
@@ -135,9 +137,9 @@ private fun DashboardScreen(
         item {
             StatCard(
                 title = "RAM used",
-                value = formatBytes(state.stats.usedRamBytes),
-                subtitle = "${formatBytes(state.stats.freeRamBytes)} free of " +
-                    formatBytes(state.stats.totalRamBytes),
+                value = CacheCleaner.formatBytes(state.stats.usedRamBytes),
+                subtitle = "${CacheCleaner.formatBytes(state.stats.freeRamBytes)} free of " +
+                    CacheCleaner.formatBytes(state.stats.totalRamBytes),
                 fraction = state.stats.usedRamPercent / 100f,
                 color = MaterialTheme.colorScheme.secondary,
             )
@@ -160,6 +162,18 @@ private fun DashboardScreen(
                     "${state.services.count { it.state == ServiceState.DISABLED }} disabled"
                 },
                 onClick = onManageServices,
+            )
+        }
+
+        item {
+            ActionCard(
+                title = "Clear caches",
+                subtitle = if (state.clearingCaches) {
+                    "Trimming caches…"
+                } else {
+                    "Trim all app caches"
+                },
+                onClick = onClearCaches,
             )
         }
 
@@ -436,14 +450,4 @@ private fun backendLabel(backend: Backend): String = when (backend) {
     Backend.SHIZUKU_LITE -> "Shizuku-lite: ready"
     Backend.ROOT -> "Root: ready"
     Backend.NONE -> "No privileges"
-}
-
-fun formatBytes(bytes: Long): String {
-    if (bytes <= 0L) return "0 MB"
-    val mb = bytes / (1024.0 * 1024.0)
-    return if (mb >= 1024) {
-        String.format(Locale.US, "%.2f GB", mb / 1024.0)
-    } else {
-        String.format(Locale.US, "%.0f MB", mb)
-    }
 }

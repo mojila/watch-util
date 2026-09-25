@@ -22,6 +22,9 @@ The UI is built with Compose for Wear Material 3 and renders correctly on both
 - **Services** — lists system packages from `pm`, showing whether each is
   enabled or disabled. Tap a package to disable it (`pm disable-user`) or
   re-enable it (`pm enable`).
+- **Clear caches** — trims every app's cache files with `pm trim-caches`,
+  reclaiming storage without touching user data, logins or settings. Requires
+  the bridge or root.
 - **Reboot** — restarts the watch, behind a confirmation screen.
 - **Round + square layouts** — `ScreenScaffold` + `ScalingLazyColumn` center
   content and inset it for curved edges, so no shape-specific layout is needed.
