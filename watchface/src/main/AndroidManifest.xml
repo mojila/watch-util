@@ -5,8 +5,13 @@
         android:name="android.hardware.type.watch"
         android:required="true" />
 
-    <!-- Heart rate read by the watch face. -->
-    <uses-permission android:name="android.permission.BODY_SENSORS" />
+    <!-- Required for the system to deliver complication data to this face.
+         Without it the ComplicationController discards provider responses
+         ("provider has no permission") and every slot stays empty. The
+         watchface library does not declare it, so the face must. All six
+         metrics are read from complication slots, so no sensor permission is
+         needed. -->
+    <uses-permission android:name="com.google.android.wearable.permission.RECEIVE_COMPLICATION_DATA" />
 
     <application
         android:label="@string/app_name"

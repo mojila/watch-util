@@ -32,20 +32,12 @@ class WatchFaceTextTest {
         assertEquals("12:00", WatchFaceText.time(hour = 12, minute = 0, is24Hour = true))
     }
 
-    @Test
-    fun `24h with seconds zero pads seconds`() {
-        assertEquals(
-            "08:03:07",
-            WatchFaceText.timeWithSeconds(hour = 8, minute = 3, second = 7, is24Hour = true),
-        )
-    }
+    // ------------------------------------------------------------------- date
 
     @Test
-    fun `24h midnight with seconds is 00 00 00`() {
-        assertEquals(
-            "00:00:00",
-            WatchFaceText.timeWithSeconds(hour = 0, minute = 0, second = 0, is24Hour = true),
-        )
+    fun `date is a short locale aware day month day`() {
+        val zdt = java.time.ZonedDateTime.of(2026, 9, 25, 14, 30, 0, 0, java.time.ZoneId.of("UTC"))
+        assertEquals("Fri, Sep 25", WatchFaceText.date(zdt, java.util.Locale.US))
     }
 
     // --------------------------------------------------------------- 12-hour
@@ -73,14 +65,6 @@ class WatchFaceTextTest {
     @Test
     fun `12h late evening wraps to 11`() {
         assertEquals("11:45", WatchFaceText.time(hour = 23, minute = 45, is24Hour = false))
-    }
-
-    @Test
-    fun `12h with seconds keeps zero padding`() {
-        assertEquals(
-            "12:00:05",
-            WatchFaceText.timeWithSeconds(hour = 0, minute = 0, second = 5, is24Hour = false),
-        )
     }
 
     @Test

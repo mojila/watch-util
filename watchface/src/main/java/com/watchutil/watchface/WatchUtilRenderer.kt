@@ -22,10 +22,24 @@ import androidx.wear.watchface.complications.data.RangedValueComplicationData
 import androidx.wear.watchface.complications.data.ShortTextComplicationData
 import androidx.wear.watchface.style.CurrentUserStyleRepository
 import com.watchutil.watchface.core.BatterySnapshot
-import com.watchutil.watchface.core.HeartRateFormat
+import com.watchutil.watchface.core.FIRST_LABEL_Y_RATIO
+import com.watchutil.watchface.core.STAT_TEXT_RATIO
+import com.watchutil.watchface.core.StatFormat
+import com.watchutil.watchface.core.StatMetric
+import com.watchutil.watchface.core.StatValueCache
 import com.watchutil.watchface.core.WatchFaceAnimation
 import com.watchutil.watchface.core.WatchFaceText
-import com.watchutil.watchface.sensor.HeartRateSource
+import com.watchutil.watchface.core.columnX
+import com.watchutil.watchface.core.labelTextSize
+import com.watchutil.watchface.core.labelY
+import com.watchutil.watchface.core.statTextSize
+import com.watchutil.watchface.core.valueY
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZonedDateTime
 
@@ -34,29 +48,34 @@ import java.time.ZonedDateTime
  *
  * Design constraints, in priority order:
  *
- *  1. **Low power.** The renderer is created with a 1 s interactive delay, since
- *     the face only needs whole-second resolution, and returns false from
- *     [shouldAnimate] whenever the drawn content is not changing. The
- *     heart-rate sensor is burst-sampled (see [HeartRateSource]) and never in
- *     ambient.
- *  2. **Legibility.** Time is the primary element; battery and heart rate sit
- *     below it, clear of the corners so round and square displays both work.
+ *  1. **Low power.** The face has minute resolution (no seconds), so the
+ *     renderer is created with a 60 s interactive delay, and returns false from
+ *     [shouldAnimate] whenever the drawn content is not changing. Complication
+ *     values still refresh promptly, because each slot's data flow calls
+ *     `invalidate()` when a new value arrives.
+ *  2. **Legibility.** Time is the primary element; a combined date+battery line
+ *     sits beneath it, and the six health metrics fill a 2x3 grid below that.
+ *     Grid geometry comes from the `core` grid helpers, which keep every cell
+ *     clear of the round bezel and the square corners.
  *  3. **Ambient safety.** Ambient / AOD draws only time and battery, in a dim
  *     gray, with thin outlines and a burn-in shift.
  *
- * The heart-rate complication slot is rendered by this renderer via
- * [ComplicationSlot.render] so that taps and the highlight layer keep working,
- * and so the fallback text is visible whenever the live sensor value is stale
- * or unavailable.
+ * The six metric slots are *read* (never rendered by the library) and their text
+ * is drawn directly in the grid; a slot with no usable data contributes
+ * [StatFormat.PLACEHOLDER]. Because an unrendered slot gets no frames of its
+ * own, this renderer observes [ComplicationSlot.complicationData] for **every**
+ * slot and calls [postInvalidate] when it changes, so a new value appears
+ * immediately instead of only on the next scheduled frame.
  *
- * @param heartRateSlot the fallback slot, resolved from the service's manager.
+ * @param statSlots one slot per [StatMetric], resolved from the service's
+ *   manager and keyed by the metric it feeds.
  */
 class WatchUtilRenderer(
     private val context: Context,
     surfaceHolder: SurfaceHolder,
     currentUserStyleRepository: CurrentUserStyleRepository,
     private val watchState: WatchState,
-    private val heartRateSlot: ComplicationSlot,
+    private val statSlots: Map<StatMetric, ComplicationSlot>,
 ) : Renderer.CanvasRenderer2<WatchUtilRenderer.SharedAssets>(
     surfaceHolder,
     currentUserStyleRepository,
@@ -72,6 +91,7 @@ class WatchUtilRenderer(
     class SharedAssets : Renderer.SharedAssets {
         lateinit var timePaint: Paint
         lateinit var timeOutlinePaint: Paint
+        lateinit var datePaint: Paint
         lateinit var labelPaint: Paint
         lateinit var labelOutlinePaint: Paint
         lateinit var valuePaint: Paint
@@ -79,7 +99,40 @@ class WatchUtilRenderer(
         override fun onDestroy() = Unit
     }
 
-    private val heartRateSource = HeartRateSource(context.applicationContext)
+    /**
+     * Owns the [statSlots] observers for the renderer's lifetime; cancelled in
+     * [onDestroy] so nothing leaks past the face.
+     *
+     * `Dispatchers.Main.immediate` is deliberate: slot data arrives on the UI
+     * thread, and an immediate dispatch keeps the invalidation on that thread
+     * without an extra hop. [postInvalidate] is used anyway so the observer is
+     * safe even if it is ever dispatched elsewhere.
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /**
+     * Last-known values persisted across a process death. Wear OS can kill the
+     * face while the screen is off; without this, a recreated process draws the
+     * placeholder for every slot until the providers respond. Only the
+     * interactive grid consults it — ambient draws time + battery only.
+     */
+    private val statValueStore = StatValueStore(context)
+
+    init {
+        // An unrendered complication slot never gets a frame of its own, so a
+        // new metric value would otherwise only appear on the next 60 s
+        // scheduled frame. The library's invalidate callback for a slot is
+        // driven by its CanvasComplication (see ComplicationSlot.renderer), but
+        // for a read-only slot nothing renders it, so the data flow is observed
+        // directly — for every slot, so any metric updating redraws the grid.
+        // complicationData emits for both new data and timeline selection, which
+        // is exactly when a drawn number can change.
+        statSlots.values.forEach { slot ->
+            scope.launch {
+                slot.complicationData.collect { postInvalidate() }
+            }
+        }
+    }
 
     /** Battery is refreshed at most once a minute; it changes slowly. */
     private var cachedBattery: BatterySnapshot = BatterySnapshot.UNKNOWN
@@ -104,6 +157,11 @@ class WatchUtilRenderer(
             style = Paint.Style.STROKE
             strokeWidth = AMBIENT_STROKE_WIDTH
             color = AMBIENT_DIM_COLOR
+        }
+        assets.datePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = regular
+            textAlign = Paint.Align.CENTER
+            color = DATE_COLOR
         }
         assets.labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = regular
@@ -177,91 +235,71 @@ class WatchUtilRenderer(
     ) {
         val battery = refreshBatteryIfDue()
 
-        // Defense in depth: only ever sample when the watch is genuinely
-        // interactive. `watchState.isAmbient` may lag the draw mode, so treat a
-        // null as "do not sample".
-        val nowWall = System.currentTimeMillis()
-        val interactive = watchState.isAmbient.value != true
-        heartRateSource.requestSample(nowWall, isInteractive = interactive) { invalidate() }
-        // Bound the burst's life so the listener never lingers when the sensor
-        // produces nothing (e.g. the watch is not on a wrist).
-        heartRateSource.cancelIfTimedOut(nowWall)
-
         val centerX = bounds.exactCenterX()
         val centerY = bounds.exactCenterY()
         val radius = minOf(bounds.width(), bounds.height()) / 2f
 
-        // Time: large, centered slightly above the middle to leave room for the
-        // stats and the heart rate below.
+        // Time: large, centered in the upper third. No seconds are drawn; the
+        // minute-resolution update delay lives in the companion object.
         assets.timePaint.textSize = radius * TIME_TEXT_RATIO
-        val timeText = WatchFaceText.timeWithSeconds(
+        val timeText = WatchFaceText.time(
             zonedDateTime.hour,
             zonedDateTime.minute,
-            zonedDateTime.second,
             is24Hour = true,
         )
         val timeY = centerY - radius * TIME_Y_RATIO
         canvas.drawText(timeText, centerX, timeY, assets.timePaint)
 
-        // Battery under the time: a small label and the percentage.
-        val statSize = radius * STAT_TEXT_RATIO
-        assets.labelPaint.textSize = statSize * 0.7f
-        assets.valuePaint.textSize = statSize
-
-        val batteryLabelY = centerY + radius * STAT_Y_RATIO
-        canvas.drawText("BATTERY", centerX, batteryLabelY, assets.labelPaint)
+        // Date and battery share one line directly under the time, in the same
+        // paint so it reads as part of the time block rather than as another
+        // stat. Battery used to have a grid cell of its own; folding it in here
+        // frees that cell for the six metrics.
+        assets.datePaint.textSize = radius * DATE_TEXT_RATIO
         canvas.drawText(
-            battery.formatLevel(),
+            "${WatchFaceText.date(zonedDateTime)} · ${battery.formatLevel()}",
             centerX,
-            batteryLabelY + statSize * 1.3f,
-            assets.valuePaint,
+            centerY - radius * DATE_Y_RATIO,
+            assets.datePaint,
         )
 
-        // Heart rate: exactly one of live or complication is drawn, so the two
-        // can never overlap in the lower-centre region.
-        //  - fresh live reading -> draw the BPM directly (taps/highlight still
-        //    work via renderHighlightLayer, which always delegates to the slot);
-        //  - complication has usable data -> render the slot as the fallback;
-        //  - neither -> draw our own "--" placeholder, so nothing overlaps and
-        //    the region is never left blank.
-        val liveReading = heartRateSource.reading.value
-        // Use the unit-tested helper for the freshness decision so the tested
-        // rule is the one that actually ships.
-        val live = HeartRateFormat.isLive(liveReading, nowWall)
-        if (live) {
-            val hrY = centerY + radius * HR_Y_RATIO
-            assets.valuePaint.textSize = statSize * 1.4f
-            assets.valuePaint.color = HR_COLOR
+        // The 2x3 metric grid. Text sizes are constant across the grid, so they
+        // are set once here rather than per metric.
+        assets.labelPaint.textSize = labelTextSize(radius)
+        assets.valuePaint.textSize = statTextSize(radius)
+        assets.valuePaint.color = VALUE_COLOR
+
+        for (metric in StatMetric.entries) {
+            val slot = statSlots.getValue(metric)
+            val x = columnX(centerX, radius, metric.column)
             canvas.drawText(
-                HeartRateFormat.formatBpm(liveReading?.valueBpm),
-                centerX,
-                hrY,
+                metric.label,
+                x,
+                labelY(centerY, radius, metric.row),
+                assets.labelPaint,
+            )
+            // The provider's text is drawn through the persistent cache: a
+            // usable value wins and is written back, while an unusable slot
+            // (e.g. right after the process was recreated) falls back to the
+            // last known value instead of flashing the placeholder. The slot is
+            // never rendered, so its invalidation is wired in `init`.
+            val current = complicationText(slot)
+            StatValueCache.persistable(current)?.let { statValueStore.write(metric, it) }
+            canvas.drawText(
+                StatValueCache.resolve(current, statValueStore.read(metric)),
+                x,
+                valueY(centerY, radius, metric.row),
                 assets.valuePaint,
             )
-            assets.valuePaint.color = VALUE_COLOR
-        } else if (!complicationText().isNullOrBlank()) {
-            heartRateSlot.render(canvas, zonedDateTime, renderParameters)
-        } else {
-            val hrY = centerY + radius * HR_Y_RATIO
-            assets.valuePaint.textSize = statSize * 1.4f
-            assets.valuePaint.color = LABEL_COLOR
-            canvas.drawText(
-                HeartRateFormat.PLACEHOLDER,
-                centerX,
-                hrY,
-                assets.valuePaint,
-            )
-            assets.valuePaint.color = VALUE_COLOR
         }
     }
 
     /**
-     * Extracts the heart-rate text from the complication slot, or null when the
-     * slot has no usable data. Handles `NO_DATA` / `EMPTY` / `NOT_CONFIGURED` /
-     * `NO_PERMISSION` by returning null so the caller can show `"--"`.
+     * Extracts the display text from [slot], or null when the slot has no usable
+     * data. Handles `NO_DATA` / `EMPTY` / `NOT_CONFIGURED` / `NO_PERMISSION` by
+     * returning null so the caller can show its own placeholder.
      */
-    private fun complicationText(): String? {
-        val data: ComplicationData = heartRateSlot.complicationData.value
+    private fun complicationText(slot: ComplicationSlot): String? {
+        val data: ComplicationData = slot.complicationData.value
         val instant: Instant = Instant.now()
         return when (data.type) {
             ComplicationType.SHORT_TEXT ->
@@ -292,10 +330,6 @@ class WatchUtilRenderer(
         assets: SharedAssets,
     ) {
         // No seconds element is drawn, so the system may idle between minutes.
-        // Ambient runs no heart-rate sampling; stop any burst in flight so the
-        // sensor listener cannot outlive the interactive-to-ambient transition.
-        heartRateSource.stop()
-
         // Time and battery only.
         val battery = refreshBatteryIfDue()
 
@@ -346,8 +380,12 @@ class WatchUtilRenderer(
         zonedDateTime: ZonedDateTime,
         sharedAssets: SharedAssets,
     ) {
-        // Delegate to the slot so a tapped complication shows its highlight.
-        heartRateSlot.renderHighlightLayer(canvas, zonedDateTime, renderParameters)
+        // Delegate to every slot so a tapped complication shows its highlight.
+        // The slots are never rendered, but a user can still tap them in the
+        // editor, so their highlights must be painted too.
+        statSlots.values.forEach { slot ->
+            slot.renderHighlightLayer(canvas, zonedDateTime, renderParameters)
+        }
     }
 
     // --------------------------------------------------------------- battery
@@ -386,15 +424,17 @@ class WatchUtilRenderer(
     }
 
     override fun onDestroy() {
-        heartRateSource.stop()
+        scope.cancel()
     }
 
     private companion object {
         /**
-         * Whole-second resolution is all the face renders, so 1 s is the
-         * lowest frame rate that still looks live. Never 16 ms.
+         * The face has minute resolution only (seconds were removed), so the
+         * scheduler only needs to wake once a minute. Complication values still
+         * appear immediately, because each slot's data flow calls
+         * `invalidate()` when a new value arrives. Never 16 ms.
          */
-        const val INTERACTIVE_DRAW_MODE_UPDATE_DELAY_MILLIS = 1000L
+        const val INTERACTIVE_DRAW_MODE_UPDATE_DELAY_MILLIS = 60_000L
 
         /** How often the sticky battery broadcast is re-read while visible. */
         const val BATTERY_REFRESH_MILLIS = 60_000L
@@ -402,18 +442,24 @@ class WatchUtilRenderer(
         /** Outline width for ambient text; thin strokes stay dim. */
         const val AMBIENT_STROKE_WIDTH = 2f
 
+        /**
+         * Vertical layout, as a fraction of [radius] above/below centre. The
+         * time and date block sits in the upper third; the 2x3 grid below it is
+         * positioned entirely by the `core` grid helpers, whose first label
+         * baseline ([FIRST_LABEL_Y_RATIO]) clears the date at [DATE_Y_RATIO].
+         */
         const val TIME_TEXT_RATIO = 0.40f
-        const val STAT_TEXT_RATIO = 0.10f
         const val TIME_Y_RATIO = 0.22f
-        const val STAT_Y_RATIO = 0.26f
-        const val HR_Y_RATIO = 0.62f
+        const val DATE_TEXT_RATIO = 0.09f
+        const val DATE_Y_RATIO = 0.10f
+
         const val AMBIENT_TIME_TEXT_RATIO = 0.34f
         const val AMBIENT_BATTERY_Y_RATIO = 0.20f
 
         // Matches the :app Wear Material 3 scheme (primary blue, light text).
         val TIME_COLOR = Color.parseColor("#E2E2E6")
+        val DATE_COLOR = Color.parseColor("#B9BEC6")
         val VALUE_COLOR = Color.parseColor("#4FC3F7")
-        val HR_COLOR = Color.parseColor("#FFB74D")
         val LABEL_COLOR = Color.parseColor("#8C9199")
 
         /** Dim gray keeps ambient comfortable and saves power. */

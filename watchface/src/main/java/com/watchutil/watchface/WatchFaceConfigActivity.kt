@@ -1,6 +1,5 @@
 package com.watchutil.watchface
 
-import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -10,28 +9,35 @@ import androidx.core.content.ContextCompat
 /**
  * Watch face editor entry point.
  *
- * The face needs `BODY_SENSORS` for live heart rate, but the complication
- * fallback works without it, so this activity only asks for the permission and
- * then finishes. It must never crash when the permission is denied.
+ * Asks for the one runtime permission the face needs, reports the outcome, and
+ * finishes. It is optional — the face degrades gracefully when denied.
  *
- * Uses the platform `requestPermissions` API rather than
- * `registerForActivityResult`, because the module deliberately carries no
- * dependency on `androidx.activity`.
+ * `RECEIVE_COMPLICATION_DATA` is what the system's `ComplicationController`
+ * checks before handing complication data to a watch face. Without it every
+ * slot is replaced with "no permission" data, so all six metrics stay at their
+ * `--` placeholder. The platform only ever fires its automatic request once
+ * (when the face is first added), so a user who missed that prompt has no other
+ * route to grant it — hence asking here.
+ *
+ * The face reads every metric from a complication slot, so it needs no sensor
+ * permission of its own.
+ *
+ * This activity must never crash when the permission is denied.
  */
 class WatchFaceConfigActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Already granted (or already denied once): nothing to ask, close
-        // quietly. Re-asking on every edit would be noise.
-        if (hasSensorPermission()) {
+        val missing = REQUIRED_PERMISSIONS.filterNot(::hasPermission)
+        if (missing.isEmpty()) {
+            // Nothing to ask. Re-prompting on every edit would be noise.
             finish()
             return
         }
 
         Toast.makeText(this, getString(R.string.permission_rationale), Toast.LENGTH_SHORT).show()
-        requestPermissions(arrayOf(Manifest.permission.BODY_SENSORS), REQUEST_BODY_SENSORS)
+        requestPermissions(missing.toTypedArray(), REQUEST_PERMISSIONS)
     }
 
     override fun onRequestPermissionsResult(
@@ -40,11 +46,9 @@ class WatchFaceConfigActivity : Activity() {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode != REQUEST_BODY_SENSORS) return
+        if (requestCode != REQUEST_PERMISSIONS) return
 
-        val granted = grantResults.isNotEmpty() &&
-            grantResults[0] == PackageManager.PERMISSION_GRANTED
-        val message = if (granted) {
+        val message = if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
             getString(R.string.permission_granted)
         } else {
             getString(R.string.permission_denied)
@@ -53,11 +57,18 @@ class WatchFaceConfigActivity : Activity() {
         finish()
     }
 
-    private fun hasSensorPermission(): Boolean =
-        ContextCompat.checkSelfPermission(this, Manifest.permission.BODY_SENSORS) ==
-            PackageManager.PERMISSION_GRANTED
+    private fun hasPermission(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
     private companion object {
-        const val REQUEST_BODY_SENSORS = 1
+        const val REQUEST_PERMISSIONS = 1
+
+        /**
+         * Declared in the manifest. The complication permission is defined by
+         * the Wear OS system app, so it is referenced by its literal name.
+         */
+        val REQUIRED_PERMISSIONS = listOf(
+            "com.google.android.wearable.permission.RECEIVE_COMPLICATION_DATA",
+        )
     }
 }

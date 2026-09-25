@@ -1,5 +1,6 @@
 package com.watchutil.watchface
 
+import android.content.ComponentName
 import android.graphics.RectF
 import android.view.SurfaceHolder
 import androidx.wear.watchface.ComplicationSlot
@@ -10,64 +11,89 @@ import androidx.wear.watchface.WatchFaceType
 import androidx.wear.watchface.WatchState
 import androidx.wear.watchface.complications.ComplicationSlotBounds
 import androidx.wear.watchface.complications.DefaultComplicationDataSourcePolicy
+import androidx.wear.watchface.complications.SystemDataSources
 import androidx.wear.watchface.complications.data.ComplicationType
 import androidx.wear.watchface.complications.rendering.CanvasComplicationDrawable
 import androidx.wear.watchface.complications.rendering.ComplicationDrawable
 import androidx.wear.watchface.style.CurrentUserStyleRepository
+import com.watchutil.watchface.core.StatMetric
+import com.watchutil.watchface.core.slotBottom
+import com.watchutil.watchface.core.slotLeft
+import com.watchutil.watchface.core.slotRight
+import com.watchutil.watchface.core.slotTop
 
 /**
  * Watch face entry point.
  *
- * Wires up the heart-rate complication fallback slot and the real
- * [WatchUtilRenderer]. Low power is the governing constraint: see
- * [WatchUtilRenderer] and [com.watchutil.watchface.sensor.HeartRateSource].
+ * Registers one complication slot per [StatMetric] — six in a 2x3 grid — and
+ * wires them into the real [WatchUtilRenderer]. Every slot is *read* by the
+ * renderer rather than rendered by the library, so each metric appears whether
+ * or not its provider draws into the slot. Low power is the governing
+ * constraint; see [WatchUtilRenderer].
  */
 class WatchUtilWatchFaceService : WatchFaceService() {
 
     /**
-     * Builds the heart-rate fallback slot.
+     * Builds the six metric complication slots.
      *
-     * The slot is placed in the lower-centre area, below the time and clear of
-     * the corners so it is legible on round and square displays. Its bounds use
-     * fractional unit-square coordinates.
+     * Each slot's bounds come from the `slot*` helpers in
+     * `com.watchutil.watchface.core.StatGridLayout`, which return unit-square
+     * display fractions — the form [ComplicationSlotBounds] expects. The grid
+     * is laid out so it stays legible on round and square displays; the
+     * round-bezel reasoning is documented on that file and is deliberately not
+     * repeated here.
      */
     override fun createComplicationSlotsManager(
         currentUserStyleRepository: CurrentUserStyleRepository,
     ): ComplicationSlotsManager {
-        // A single RectF for the slot, replicated across every ComplicationType
-        // by the library. The map-based constructors require an entry for *all*
-        // types (not just the supported ones) or construction throws, which
-        // makes the picker fail to add the face as a favorite.
-        val bounds = ComplicationSlotBounds(
-            RectF(
-                HEART_RATE_LEFT,
-                HEART_RATE_TOP,
-                HEART_RATE_RIGHT,
-                HEART_RATE_BOTTOM,
-            ),
-        )
+        // Every slot defaults to the Xiaomi Fitness provider matching its
+        // metric, because that is the only real source on the target watch.
+        // This is a *default*, not a fixed data source: `setFixedComplication-
+        // DataSource` is deliberately never called, so on any other watch the
+        // user can pick a different provider (or none) in the editor.
+        val slots = StatMetric.entries.map { metric ->
+            // A single RectF per slot, replicated across every ComplicationType
+            // by the library. The map-based constructors require an entry for
+            // *all* types (not just the supported ones) or construction throws,
+            // which makes the picker fail to add the face as a favorite.
+            val bounds = ComplicationSlotBounds(
+                RectF(
+                    slotLeft(metric.column),
+                    slotTop(metric.row),
+                    slotRight(metric.column),
+                    slotBottom(metric.row),
+                ),
+            )
 
-        val slot = ComplicationSlot.createRoundRectComplicationSlotBuilder(
-            HEART_RATE_SLOT_ID,
-            { watchState, invalidateCallback ->
-                CanvasComplicationDrawable(
-                    ComplicationDrawable(this),
-                    watchState,
-                    invalidateCallback,
-                )
-            },
-            listOf(
+            val policy = DefaultComplicationDataSourcePolicy(
+                ComponentName(StatMetric.PROVIDER_PACKAGE, metric.providerService),
                 ComplicationType.SHORT_TEXT,
-                ComplicationType.RANGED_VALUE,
-            ),
-            DefaultComplicationDataSourcePolicy(),
-            bounds,
-        )
-            .setEnabled(true)
-            .setNameResourceId(R.string.watch_face_name)
-            .build()
+                SystemDataSources.NO_DATA_SOURCE,
+                ComplicationType.NOT_CONFIGURED,
+            )
 
-        return ComplicationSlotsManager(listOf(slot), currentUserStyleRepository)
+            ComplicationSlot.createRoundRectComplicationSlotBuilder(
+                metric.slotId,
+                { watchState, invalidateCallback ->
+                    CanvasComplicationDrawable(
+                        ComplicationDrawable(this),
+                        watchState,
+                        invalidateCallback,
+                    )
+                },
+                listOf(
+                    ComplicationType.SHORT_TEXT,
+                    ComplicationType.RANGED_VALUE,
+                ),
+                policy,
+                bounds,
+            )
+                .setEnabled(true)
+                .setNameResourceId(R.string.watch_face_name)
+                .build()
+        }
+
+        return ComplicationSlotsManager(slots, currentUserStyleRepository)
     }
 
     override suspend fun createWatchFace(
@@ -76,31 +102,23 @@ class WatchUtilWatchFaceService : WatchFaceService() {
         complicationSlotsManager: ComplicationSlotsManager,
         currentUserStyleRepository: CurrentUserStyleRepository,
     ): WatchFace {
-        val heartRateSlot: ComplicationSlot =
-            requireNotNull(complicationSlotsManager.get(HEART_RATE_SLOT_ID)) {
-                "Heart-rate complication slot $HEART_RATE_SLOT_ID was not registered"
+        // Resolve every slot up front so a registration bug fails loudly here
+        // rather than silently dropping a metric from the grid.
+        val statSlots: Map<StatMetric, ComplicationSlot> = StatMetric.entries.associateWith { metric ->
+            requireNotNull(complicationSlotsManager.get(metric.slotId)) {
+                "${metric.name} complication slot ${metric.slotId} was not registered"
             }
+        }
 
         val renderer = WatchUtilRenderer(
             context = this,
             surfaceHolder = surfaceHolder,
             currentUserStyleRepository = currentUserStyleRepository,
             watchState = watchState,
-            heartRateSlot = heartRateSlot,
+            // Read for their text and drawn in the 2x3 grid, degrading to "--"
+            // when a provider has no usable data.
+            statSlots = statSlots,
         )
         return WatchFace(WatchFaceType.DIGITAL, renderer)
-    }
-
-    private companion object {
-        /** Id of the single heart-rate fallback slot. */
-        const val HEART_RATE_SLOT_ID = 1
-
-        // Lower-centre, fraction of the display. Kept off the edges so the
-        // content is clear of the corners on a square display and does not wrap
-        // around the bezel on a round one.
-        const val HEART_RATE_LEFT = 0.35f
-        const val HEART_RATE_TOP = 0.62f
-        const val HEART_RATE_RIGHT = 0.65f
-        const val HEART_RATE_BOTTOM = 0.80f
     }
 }
