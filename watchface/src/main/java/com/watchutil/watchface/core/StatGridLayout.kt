@@ -30,7 +30,7 @@ const val FIRST_LABEL_Y_RATIO = 0.14f
 const val ROW_PITCH_RATIO = 0.20f
 
 /** Value text size, as a fraction of radius. */
-const val STAT_TEXT_RATIO = 0.085f
+const val STAT_TEXT_RATIO = 0.094f
 
 /** Label size relative to value size. */
 const val LABEL_SIZE_FACTOR = 0.7f

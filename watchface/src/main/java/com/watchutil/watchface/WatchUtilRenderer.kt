@@ -448,12 +448,12 @@ class WatchUtilRenderer(
          * positioned entirely by the `core` grid helpers, whose first label
          * baseline ([FIRST_LABEL_Y_RATIO]) clears the date at [DATE_Y_RATIO].
          */
-        const val TIME_TEXT_RATIO = 0.40f
+        const val TIME_TEXT_RATIO = 0.44f
         const val TIME_Y_RATIO = 0.22f
-        const val DATE_TEXT_RATIO = 0.09f
+        const val DATE_TEXT_RATIO = 0.099f
         const val DATE_Y_RATIO = 0.10f
 
-        const val AMBIENT_TIME_TEXT_RATIO = 0.34f
+        const val AMBIENT_TIME_TEXT_RATIO = 0.375f
         const val AMBIENT_BATTERY_Y_RATIO = 0.20f
 
         // Matches the :app Wear Material 3 scheme (primary blue, light text).
