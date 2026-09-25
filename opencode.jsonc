@@ -1,0 +1,5 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // Use the project's orchestrator agent for new sessions by default.
+  "default_agent": "orchestrator",
+}
