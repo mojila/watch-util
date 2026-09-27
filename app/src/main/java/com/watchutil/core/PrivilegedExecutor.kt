@@ -8,11 +8,6 @@ import java.io.InputStreamReader
 
 enum class Backend { SHIZUKU_LITE, ROOT, NONE }
 
-data class ExecResult(val code: Int, val out: String, val err: String) {
-    val ok: Boolean get() = code == 0
-    val combined: String get() = if (err.isBlank()) out else "$out\n$err".trim()
-}
-
 /**
  * The single place privileged commands are executed.
  *
@@ -63,12 +58,13 @@ class PrivilegedExecutor(
 
         return when (backend) {
             Backend.SHIZUKU_LITE -> {
+                // The bridge reports the command outcome directly; only a dead
+                // bridge (not a command failure) should degrade the backend.
                 val result = bridge.exec(args)
                 if (result.code == -1 && result.err.contains("bridge", ignoreCase = true)) {
-                    // Bridge died (reboot, crash, killed). Degrade gracefully.
                     backend = Backend.NONE
                 }
-                ExecResult(result.code, result.out, result.err)
+                result
             }
 
             Backend.ROOT -> withContext(Dispatchers.IO) {

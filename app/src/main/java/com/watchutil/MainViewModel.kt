@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.watchutil.bridge.BridgeClient
 import com.watchutil.core.Backend
 import com.watchutil.core.CacheCleaner
+import com.watchutil.core.CriticalPackages
 import com.watchutil.core.PackageParser
 import com.watchutil.core.PrivilegedExecutor
 import com.watchutil.core.ServiceEntry
@@ -24,7 +25,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-enum class Screen { DASHBOARD, SERVICES, CONFIRM_REBOOT }
+enum class Screen { DASHBOARD, SERVICES, CONFIRM_REBOOT, CONFIRM_DISABLE }
 
 data class UiState(
     val screen: Screen = Screen.DASHBOARD,
@@ -36,6 +37,8 @@ data class UiState(
     val busyPackage: String? = null,
     val message: String? = null,
     val bridgeToken: String = "",
+    /** Package awaiting confirmation before it is disabled. */
+    val pendingDisable: ServiceEntry? = null,
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -150,20 +153,64 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pkg.substringAfterLast('.')
     }
 
+    /**
+     * Handles a tap on a service row.
+     *
+     * Enabling is immediate. Disabling is routed through a confirmation screen
+     * and is refused outright for [CriticalPackages] — a package that keeps the
+     * watch usable must not be switched off by a stray tap.
+     */
     fun toggleService(entry: ServiceEntry) {
         if (_state.value.busyPackage != null) return
-        val target = if (entry.state == ServiceState.DISABLED) "enable" else "disable-user"
+
+        if (entry.state == ServiceState.DISABLED) {
+            runToggle(entry, enable = true)
+            return
+        }
+
+        if (CriticalPackages.isProtected(entry.packageName)) {
+            _state.update {
+                it.copy(
+                    message = "${entry.label} is a critical system package and cannot be disabled.",
+                )
+            }
+            return
+        }
+
+        _state.update { it.copy(pendingDisable = entry, message = null) }
+        navigate(Screen.CONFIRM_DISABLE)
+    }
+
+    /** Cancels a pending disable and returns to the services list. */
+    fun cancelDisable() {
+        _state.update { it.copy(pendingDisable = null) }
+        navigate(Screen.SERVICES)
+    }
+
+    /** Runs the disable that [toggleService] queued for confirmation. */
+    fun confirmDisable() {
+        val entry = _state.value.pendingDisable ?: return
+        _state.update { it.copy(pendingDisable = null) }
+        navigate(Screen.SERVICES)
+        runToggle(entry, enable = false)
+    }
+
+    private fun runToggle(entry: ServiceEntry, enable: Boolean) {
+        val target = if (enable) "enable" else "disable-user"
         _state.update { it.copy(busyPackage = entry.packageName) }
 
         viewModelScope.launch {
             val result = executor.exec(
                 "pm", target, "--user", "0", entry.packageName,
             )
-            val success = result.ok || PackageParser.isSuccess(result.combined)
+            // `pm` can exit 0 while printing nothing (for example when it
+            // silently declines to act), so the exit code alone is not proof:
+            // require the parser to see a real success message.
+            val success = PackageParser.isSuccess(result.combined)
 
             if (success) {
                 val newState =
-                    if (target == "enable") ServiceState.ENABLED else ServiceState.DISABLED
+                    if (enable) ServiceState.ENABLED else ServiceState.DISABLED
                 _state.update { current ->
                     current.copy(
                         busyPackage = null,

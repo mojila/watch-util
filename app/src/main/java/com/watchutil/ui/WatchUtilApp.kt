@@ -87,6 +87,12 @@ fun WatchUtilApp(viewModel: MainViewModel) {
                     viewModel.navigate(Screen.DASHBOARD)
                 },
             )
+
+            Screen.CONFIRM_DISABLE -> DisableConfirmScreen(
+                entry = state.pendingDisable,
+                onCancel = { viewModel.cancelDisable() },
+                onConfirm = { viewModel.confirmDisable() },
+            )
         }
     }
 }
@@ -298,6 +304,52 @@ private fun RebootConfirmScreen(
             ActionCard(
                 title = "Cancel",
                 subtitle = "Keep it running",
+                onClick = onCancel,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DisableConfirmScreen(
+    entry: ServiceEntry?,
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    WatchScreen {
+        item { TimeText() }
+        item { ListHeader { Text("Disable package?") } }
+        item {
+            Text(
+                text = entry?.packageName ?: "No package selected",
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
+        }
+        item {
+            Text(
+                text = "Disabling a system package can stop the watch from " +
+                    "working and may require ADB to undo.",
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
+        }
+        item {
+            ActionCard(
+                title = "Disable it",
+                subtitle = entry?.label ?: "Disable this package",
+                onClick = onConfirm,
+                accent = MaterialTheme.colorScheme.error,
+            )
+        }
+        item {
+            ActionCard(
+                title = "Cancel",
+                subtitle = "Keep it enabled",
                 onClick = onCancel,
             )
         }

@@ -37,7 +37,18 @@ object BridgeServer {
     @JvmStatic
     fun main(args: Array<String>) {
         val port = args.getOrNull(0)?.toIntOrNull() ?: BridgeProtocol.DEFAULT_PORT
+
+        // Fail closed: without a shared secret, any app on the watch that can
+        // reach loopback could otherwise drive shell commands. Refusing to bind
+        // is safer than binding unauthenticated.
         val token = args.getOrNull(1)?.takeIf { it.isNotBlank() }
+        if (token == null) {
+            System.err.println(
+                "WatchUtil bridge: no token supplied; refusing to start. " +
+                    "Usage: BridgeServer <port> <token>",
+            )
+            return
+        }
 
         val server = try {
             // Bind explicitly to IPv4 loopback. InetAddress.getLoopbackAddress()
@@ -64,7 +75,7 @@ object BridgeServer {
         }
     }
 
-    private fun handle(socket: Socket, expectedToken: String?) {
+    private fun handle(socket: Socket, expectedToken: String) {
         socket.use { s ->
             s.tcpNoDelay = true
             val reader = BufferedReader(InputStreamReader(s.getInputStream(), Charsets.UTF_8))
@@ -72,20 +83,19 @@ object BridgeServer {
 
             while (true) {
                 val line = try {
-                    reader.readLine()
+                    readBoundedLine(reader)
                 } catch (_: Exception) {
                     null
                 } ?: break
 
                 if (line.isBlank()) continue
-                if (line.length > MAX_LINE) break
 
                 val request = BridgeProtocol.decodeRequest(line) ?: run {
                     writeLine(writer, BridgeProtocol.encodeResponse(0, -1, "", "bad request", false))
                     continue
                 }
 
-                if (expectedToken != null && request.token != expectedToken) {
+                if (request.token != expectedToken) {
                     writeLine(
                         writer,
                         BridgeProtocol.encodeResponse(request.id, -1, "", "unauthorized", false),
@@ -122,6 +132,30 @@ object BridgeServer {
             // Peer went away; the read loop will terminate on its own.
         }
     }
+
+    /**
+     * Reads one `\n`-terminated line, buffering at most [MAX_LINE] characters.
+     *
+     * Reading a char at a time with an explicit cap means an oversized or
+     * unterminated line is rejected without ever allocating a string larger
+     * than the limit: [BufferedReader.readLine] would have buffered the whole
+     * line before the length could be checked.
+     *
+     * @return the line without its terminator, or null at end of stream.
+     * @throws LineTooLongException when the limit is exceeded.
+     */
+    private fun readBoundedLine(reader: BufferedReader): String? {
+        val buffer = StringBuilder()
+        while (true) {
+            val ch = reader.read()
+            if (ch == -1) return if (buffer.isEmpty()) null else buffer.toString()
+            if (ch == '\n'.code) return buffer.toString()
+            if (buffer.length >= MAX_LINE) throw LineTooLongException()
+            if (ch != '\r'.code) buffer.append(ch.toChar())
+        }
+    }
+
+    private class LineTooLongException : Exception()
 
     private data class CommandResult(val code: Int, val out: String, val err: String)
 

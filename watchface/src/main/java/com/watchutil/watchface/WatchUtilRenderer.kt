@@ -187,16 +187,19 @@ class WatchUtilRenderer(
      * The library's gate for entering ambient.
      *
      * `WatchFaceImpl.maybeUpdateDrawMode()` sets `DrawMode.AMBIENT` **only** when
-     * `watchState.isAmbient` is true *and* this method returns false; if this
-     * method returns true, the face is kept in interactive mode. It is therefore
-     * the cause of ambient, not a consequence of it, and must never be derived
-     * from [renderParameters.drawMode] — doing so deadlocks the face in
-     * interactive mode, because ambient would only be entered once the draw mode
-     * were already ambient.
+     * `watchState.isAmbient` is true *and* this method returns false; returning
+     * true keeps the face in interactive mode. So the face animates only while
+     * it is genuinely visible and not ambient, and returning false is what
+     * *permits* entering ambient — it is the gate the library waits on, not a
+     * consequence of ambient. It must therefore never be derived from
+     * [renderParameters.drawMode]: doing so deadlocks the face in interactive
+     * mode, because ambient would only be entered once the draw mode were
+     * already ambient.
      *
      * `StateFlow<Boolean>` values are nullable, so a null is treated as false
-     * (not animating), which is the safe default for power. The decision itself
-     * lives in [WatchFaceAnimation.shouldAnimate] so it is unit-tested.
+     * (not animating), which is the safe default for power and never blocks
+     * ambient. The decision itself lives in [WatchFaceAnimation.shouldAnimate]
+     * so it is unit-tested.
      */
     override fun shouldAnimate(): Boolean = WatchFaceAnimation.shouldAnimate(
         isVisible = watchState.isVisible.value,
@@ -253,10 +256,12 @@ class WatchUtilRenderer(
         // Date and battery share one line directly under the time, in the same
         // paint so it reads as part of the time block rather than as another
         // stat. Battery used to have a grid cell of its own; folding it in here
-        // frees that cell for the six metrics.
+        // frees that cell for the six metrics. The charging bolt is appended
+        // only while charging, so the line keeps its usual width on battery.
         assets.datePaint.textSize = radius * DATE_TEXT_RATIO
         canvas.drawText(
-            "${WatchFaceText.date(zonedDateTime)} · ${battery.formatLevel()}",
+            "${WatchFaceText.date(zonedDateTime)} · " +
+                "${battery.formatLevel()}${battery.formatChargingSuffix()}",
             centerX,
             centerY - radius * DATE_Y_RATIO,
             assets.datePaint,

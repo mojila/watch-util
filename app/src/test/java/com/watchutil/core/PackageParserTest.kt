@@ -60,7 +60,13 @@ class PackageParserTest {
     fun `isSuccess recognises pm output`() {
         assertTrue(PackageParser.isSuccess("Package com.x new state: disabled-user"))
         assertTrue(PackageParser.isSuccess("Package com.x new state: enabled"))
-        assertTrue(PackageParser.isSuccess(""))
         assertFalse(PackageParser.isSuccess("Error: java.lang.SecurityException"))
+    }
+
+    @Test
+    fun `blank output is a failure`() {
+        // A silent failure from pm must not be reported as a successful toggle.
+        assertFalse(PackageParser.isSuccess(""))
+        assertFalse(PackageParser.isSuccess("   \n"))
     }
 }

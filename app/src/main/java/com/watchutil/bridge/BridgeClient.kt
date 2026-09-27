@@ -1,5 +1,6 @@
 package com.watchutil.bridge
 
+import com.watchutil.core.ExecResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
@@ -10,16 +11,6 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicLong
-
-/** Outcome of a single remote command. */
-data class ExecResult(
-    val code: Int,
-    val out: String,
-    val err: String,
-) {
-    val ok: Boolean get() = code == 0
-    val combined: String get() = if (err.isBlank()) out else "$out\n$err".trim()
-}
 
 /**
  * App-side client for [BridgeServer]. Opens a short-lived loopback connection

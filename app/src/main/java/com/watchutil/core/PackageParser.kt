@@ -46,11 +46,16 @@ object PackageParser {
         return enabled + disabled
     }
 
-    /** True when `pm` reported a successful disable/enable. */
+    /**
+     * True when `pm` reported a successful disable/enable.
+     *
+     * A blank output is **not** success: `pm` can exit silently when it fails
+     * (for instance when a privileged caller is rejected), and treating that as
+     * success would report a toggle that never happened.
+     */
     fun isSuccess(output: String): Boolean {
         val lower = output.lowercase()
         return lower.contains("new state") ||
-            lower.contains("packagename") ||
-            lower.isBlank()
+            lower.contains("packagename")
     }
 }
