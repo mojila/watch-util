@@ -25,10 +25,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-enum class Screen { DASHBOARD, SERVICES, CONFIRM_REBOOT, CONFIRM_DISABLE }
-
 data class UiState(
-    val screen: Screen = Screen.DASHBOARD,
     val stats: SystemStats = SystemStats.EMPTY,
     val backend: Backend = Backend.NONE,
     val services: List<ServiceEntry> = emptyList(),
@@ -156,17 +153,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Handles a tap on a service row.
      *
-     * Enabling is immediate. Disabling is routed through a confirmation screen
-     * and is refused outright for [CriticalPackages] — a package that keeps the
-     * watch usable must not be switched off by a stray tap.
+     * Enabling is immediate. Disabling is refused outright for
+     * [CriticalPackages] — a package that keeps the watch usable must not be
+     * switched off by a stray tap — and otherwise must go through
+     * [requestDisable] + [confirmDisable].
      */
     fun toggleService(entry: ServiceEntry) {
         if (_state.value.busyPackage != null) return
 
         if (entry.state == ServiceState.DISABLED) {
             runToggle(entry, enable = true)
-            return
         }
+    }
+
+    /**
+     * Queues [entry] for a confirmed disable and returns whether the request
+     * was accepted. Critical packages are rejected with a message instead, so
+     * the caller only navigates to the confirmation screen when this is true.
+     */
+    fun requestDisable(entry: ServiceEntry): Boolean {
+        if (_state.value.busyPackage != null) return false
 
         if (CriticalPackages.isProtected(entry.packageName)) {
             _state.update {
@@ -174,24 +180,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     message = "${entry.label} is a critical system package and cannot be disabled.",
                 )
             }
-            return
+            return false
         }
 
         _state.update { it.copy(pendingDisable = entry, message = null) }
-        navigate(Screen.CONFIRM_DISABLE)
+        return true
     }
 
-    /** Cancels a pending disable and returns to the services list. */
+    /** Cancels a pending disable; the UI pops back to the services list. */
     fun cancelDisable() {
         _state.update { it.copy(pendingDisable = null) }
-        navigate(Screen.SERVICES)
     }
 
-    /** Runs the disable that [toggleService] queued for confirmation. */
+    /** Runs the disable that [requestDisable] queued for confirmation. */
     fun confirmDisable() {
         val entry = _state.value.pendingDisable ?: return
         _state.update { it.copy(pendingDisable = null) }
-        navigate(Screen.SERVICES)
         runToggle(entry, enable = false)
     }
 
@@ -291,12 +295,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
-    }
-
-    // ------------------------------------------------------------ navigation
-
-    fun navigate(screen: Screen) {
-        _state.update { it.copy(screen = screen, message = null) }
     }
 
     // --------------------------------------------------------------- reboot

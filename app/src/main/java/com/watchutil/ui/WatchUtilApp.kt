@@ -36,8 +36,10 @@ import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.TimeText
+import androidx.wear.compose.navigation.SwipeDismissableNavHost
+import androidx.wear.compose.navigation.composable
+import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
 import com.watchutil.MainViewModel
-import com.watchutil.Screen
 import com.watchutil.UiState
 import com.watchutil.core.Backend
 import com.watchutil.core.CacheCleaner
@@ -64,35 +66,64 @@ fun WatchUtilApp(viewModel: MainViewModel) {
     }
 
     WatchUtilTheme {
-        when (state.screen) {
-            Screen.DASHBOARD -> DashboardScreen(
-                state = state,
-                onManageServices = { viewModel.navigate(Screen.SERVICES) },
-                onClearCaches = { viewModel.clearCaches() },
-                onRefreshBackend = { viewModel.refreshBackend() },
-                onRequestReboot = { viewModel.navigate(Screen.CONFIRM_REBOOT) },
-            )
+        // SwipeDismissableNavHost owns the back stack, so the system back
+        // gesture and a swipe from the left edge both pop to the previous
+        // page. The controller is remembered across recompositions.
+        val navController = rememberSwipeDismissableNavController()
 
-            Screen.SERVICES -> ServicesScreen(
-                state = state,
-                onBack = { viewModel.navigate(Screen.DASHBOARD) },
-                onRefresh = { viewModel.loadServices() },
-                onToggle = { viewModel.toggleService(it) },
-            )
+        SwipeDismissableNavHost(
+            navController = navController,
+            startDestination = "dashboard",
+        ) {
+            composable("dashboard") {
+                DashboardScreen(
+                    state = state,
+                    onManageServices = { navController.navigate("services") },
+                    onClearCaches = { viewModel.clearCaches() },
+                    onRefreshBackend = { viewModel.refreshBackend() },
+                    onRequestReboot = { navController.navigate("confirm_reboot") },
+                )
+            }
 
-            Screen.CONFIRM_REBOOT -> RebootConfirmScreen(
-                onCancel = { viewModel.navigate(Screen.DASHBOARD) },
-                onConfirm = {
-                    viewModel.reboot()
-                    viewModel.navigate(Screen.DASHBOARD)
-                },
-            )
+            composable("services") {
+                ServicesScreen(
+                    state = state,
+                    onBack = { navController.popBackStack() },
+                    onRefresh = { viewModel.loadServices() },
+                    onToggle = { viewModel.toggleService(it) },
+                    onRequestDisable = { entry ->
+                        // requestDisable() rejects critical packages and
+                        // reports why, so only navigate when it accepted.
+                        if (viewModel.requestDisable(entry)) {
+                            navController.navigate("confirm_disable")
+                        }
+                    },
+                )
+            }
 
-            Screen.CONFIRM_DISABLE -> DisableConfirmScreen(
-                entry = state.pendingDisable,
-                onCancel = { viewModel.cancelDisable() },
-                onConfirm = { viewModel.confirmDisable() },
-            )
+            composable("confirm_reboot") {
+                RebootConfirmScreen(
+                    onCancel = { navController.popBackStack() },
+                    onConfirm = {
+                        viewModel.reboot()
+                        navController.popBackStack()
+                    },
+                )
+            }
+
+            composable("confirm_disable") {
+                DisableConfirmScreen(
+                    entry = state.pendingDisable,
+                    onCancel = {
+                        viewModel.cancelDisable()
+                        navController.popBackStack()
+                    },
+                    onConfirm = {
+                        viewModel.confirmDisable()
+                        navController.popBackStack()
+                    },
+                )
+            }
         }
     }
 }
@@ -236,6 +267,7 @@ private fun ServicesScreen(
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onToggle: (ServiceEntry) -> Unit,
+    onRequestDisable: (ServiceEntry) -> Unit,
 ) {
     WatchScreen {
         item { TimeText() }
@@ -261,7 +293,16 @@ private fun ServicesScreen(
             ServiceCard(
                 entry = entry,
                 busy = state.busyPackage == entry.packageName,
-                onClick = { onToggle(entry) },
+                // Enabling is immediate. Disabling goes through the
+                // confirmation route (the ViewModel still refuses critical
+                // packages outright and reports why via `message`).
+                onClick = {
+                    if (entry.state == ServiceState.DISABLED) {
+                        onToggle(entry)
+                    } else {
+                        onRequestDisable(entry)
+                    }
+                },
             )
         }
 

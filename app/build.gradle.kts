@@ -61,6 +61,15 @@ dependencies {
     implementation("androidx.wear.compose:compose-material3:1.6.1")
     implementation("androidx.wear.compose:compose-foundation:1.6.1")
 
+    // Swipe-to-dismiss navigation. Wear navigation 1.6.1 calls
+    // NavigatorState.pushWithTransition, which was removed in Navigation
+    // 2.9.0; 2.8.9 is the newest release that still provides it. The 2.6.0
+    // that the Wear POM publishes is older than the Compose UI 1.9.0 line, so
+    // pin 2.8.9 explicitly. Anything in 2.9.x/2.10.x compiles but throws
+    // NoSuchMethodError on the first navigate().
+    implementation("androidx.wear.compose:compose-navigation:1.6.1")
+    implementation("androidx.navigation:navigation-compose:2.8.9")
+
     implementation("androidx.compose.ui:ui:1.9.0")
     implementation("androidx.compose.ui:ui-tooling-preview:1.9.0")
     debugImplementation("androidx.compose.ui:ui-tooling:1.9.0")
